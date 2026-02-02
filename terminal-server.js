@@ -8,6 +8,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.TERMINAL_PORT || 3002;
 const API_KEY = process.env.TERMINAL_API_KEY || 'change-me-in-production';
+const DISABLE_WHITELIST = process.env.DISABLE_COMMAND_WHITELIST === 'true';
 
 // Middleware
 app.use(cors());
@@ -38,7 +39,9 @@ async function getOrCreateTerminalSession(sessionId) {
   try {
     if (!sessions.has(sessionId)) {
       const sessionPath = `./sessions/${sessionId}-terminal.json`;
-      const chatbot = new TerminalChatbot(sessionPath);
+      const chatbot = new TerminalChatbot(sessionPath, {
+        disableWhitelist: DISABLE_WHITELIST
+      });
       await chatbot.initialize();
       sessions.set(sessionId, chatbot);
       console.log(`[Terminal Session] Created: ${sessionId}`);
