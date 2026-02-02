@@ -43,20 +43,32 @@ async function getOrCreateSession(sessionId) {
 /**
  * POST /chat
  * Send a message to the chatbot
- * Body: { sessionId: string, message: string }
+ * Body: { 
+ *   sessionId: string, 
+ *   message: string (or query: string),
+ *   context?: object (optional additional context)
+ * }
  */
 app.post('/chat', async (req, res) => {
   try {
-    const { sessionId, message } = req.body;
+    const { sessionId, message, query, context } = req.body;
+    const userMessage = message || query;
 
-    if (!sessionId || !message) {
+    if (!sessionId || !userMessage) {
       return res.status(400).json({
-        error: 'Missing required fields: sessionId, message'
+        error: 'Missing required fields: sessionId, message (or query)'
       });
     }
 
+    // Format message with optional context
+    let formattedMessage = userMessage;
+    if (context && typeof context === 'object') {
+      const contextStr = JSON.stringify(context, null, 2);
+      formattedMessage = `${userMessage}\n\n[Additional Context]\n${contextStr}`;
+    }
+
     const chatbot = await getOrCreateSession(sessionId);
-    const response = await chatbot.chat(message);
+    const response = await chatbot.chat(formattedMessage);
 
     res.json({
       success: true,

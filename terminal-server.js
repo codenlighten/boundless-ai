@@ -68,11 +68,15 @@ app.get('/health', (req, res) => {
  * POST /execute
  * Execute a terminal command
  * Headers: x-api-key
- * Body: { sessionId: string, command: string }
+ * Body: { 
+ *   sessionId: string, 
+ *   command: string,
+ *   context?: object (optional execution context)
+ * }
  */
 app.post('/execute', authenticateApiKey, async (req, res) => {
   try {
-    const { sessionId, command } = req.body;
+    const { sessionId, command, context } = req.body;
 
     if (!sessionId || !command) {
       return res.status(400).json({
@@ -83,11 +87,15 @@ app.post('/execute', authenticateApiKey, async (req, res) => {
     }
 
     const chatbot = await getOrCreateTerminalSession(sessionId);
+    
+    // Add context to command execution if provided
+    const executionContext = context ? { additionalContext: context } : {};
     const result = await chatbot.executeCommand(command, sessionId);
 
     res.json({
       success: result.success,
       ...result,
+      context: context || null,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -156,21 +164,33 @@ app.get('/stats/:sessionId', authenticateApiKey, async (req, res) => {
 /**
  * POST /chat/:sessionId
  * Send a chat message (extends to terminal context)
+ * Body: { 
+ *   message: string (or query: string),
+ *   context?: object (optional context)
+ * }
  */
 app.post('/chat/:sessionId', authenticateApiKey, async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { message } = req.body;
+    const { message, query, context } = req.body;
+    const userMessage = message || query;
 
-    if (!message) {
+    if (!userMessage) {
       return res.status(400).json({
-        error: 'Missing message field',
+        error: 'Missing message (or query) field',
         timestamp: new Date().toISOString()
       });
     }
 
+    // Format message with optional context
+    let formattedMessage = userMessage;
+    if (context && typeof context === 'object') {
+      const contextStr = JSON.stringify(context, null, 2);
+      formattedMessage = `${userMessage}\n\n[Additional Context]\n${contextStr}`;
+    }
+
     const chatbot = await getOrCreateTerminalSession(sessionId);
-    const response = await chatbot.chat(message);
+    const response = await chatbot.chat(formattedMessage);
 
     res.json({
       success: true,
