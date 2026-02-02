@@ -208,6 +208,114 @@ app.post('/chat/:sessionId', authenticateApiKey, async (req, res) => {
 });
 
 /**
+ * POST /setup-ssh
+ * Setup SSH access to a remote server
+ * Body: {
+ *   targetHost: string,
+ *   targetUser: string,
+ *   targetPassword: string
+ * }
+ */
+app.post('/setup-ssh', authenticateApiKey, async (req, res) => {
+  try {
+    const { targetHost, targetUser, targetPassword } = req.body;
+
+    if (!targetHost || !targetUser || !targetPassword) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['targetHost', 'targetUser', 'targetPassword'],
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    console.log(`[/setup-ssh] Setting up SSH access to ${targetUser}@${targetHost}`);
+
+    // Check if SSH key exists
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    let keyExists = false;
+    try {
+      await execAsync('test -f ~/.ssh/id_rsa');
+      keyExists = true;
+    } catch (e) {
+      // Key doesn't exist
+    }
+
+    // Generate key if needed
+    if (!keyExists) {
+      console.log('[/setup-ssh] Generating SSH key...');
+      await execAsync('ssh-keygen -t rsa -b 4096 -C "boundless-ai" -f ~/.ssh/id_rsa -N ""');
+    }
+
+    // Get public key
+    const { stdout: pubKey } = await execAsync('cat ~/.ssh/id_rsa.pub');
+
+    // Install sshpass if not available
+    try {
+      await execAsync('which sshpass');
+    } catch (e) {
+      console.log('[/setup-ssh] Installing sshpass...');
+      try {
+        await execAsync('apt-get update && apt-get install -y sshpass', { timeout: 60000 });
+      } catch (installError) {
+        return res.status(500).json({
+          error: 'Failed to install sshpass. Manual setup required.',
+          details: installError.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    // Copy SSH key using sshpass
+    const sshCopyCommand = `sshpass -p '${targetPassword}' ssh-copy-id -o StrictHostKeyChecking=no ${targetUser}@${targetHost}`;
+    
+    try {
+      await execAsync(sshCopyCommand, { timeout: 30000 });
+      console.log('[/setup-ssh] SSH key copied successfully');
+    } catch (copyError) {
+      return res.status(500).json({
+        error: 'Failed to copy SSH key',
+        details: copyError.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Test SSH connection
+    const testCommand = `ssh -o BatchMode=yes -o ConnectTimeout=5 ${targetUser}@${targetHost} 'whoami'`;
+    let testResult;
+    try {
+      const { stdout } = await execAsync(testCommand);
+      testResult = stdout.trim();
+      console.log('[/setup-ssh] SSH connection test successful:', testResult);
+    } catch (testError) {
+      return res.status(500).json({
+        error: 'SSH key copied but connection test failed',
+        details: testError.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'SSH access configured successfully',
+      target: `${targetUser}@${targetHost}`,
+      publicKey: pubKey.trim(),
+      connectionTest: testResult,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[/setup-ssh] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
  * GET /
  * API documentation
  */
@@ -223,6 +331,12 @@ app.get('/', (req, res) => {
         headers: { 'x-api-key': 'your-api-key' },
         body: { sessionId: 'string', command: 'string' },
         example: { sessionId: 'user123', command: 'ls -la' }
+      },
+      'POST /setup-ssh': {
+        description: 'Setup SSH access to a remote server',
+        headers: { 'x-api-key': 'your-api-key' },
+        body: { targetHost: 'string', targetUser: 'string', targetPassword: 'string' },
+        example: { targetHost: '104.248.166.157', targetUser: 'root', targetPassword: 'your-password' }
       },
       'GET /history/:sessionId': {
         description: 'Get command execution history',
