@@ -5,7 +5,7 @@ import { RemoteAgent } from './lib/remoteAgent.js';
  */
 async function testRemoteAgent() {
   const serverUrl = 'http://localhost:3002';
-  const apiKey = 'your-secure-api-key-change-in-production';
+  const apiKey = '9K7mxPqY8vRn3zWdL6fHjN2bTcQsXg4uA5eZ1wVhG8pMtJkF7rBnCyDx';
 
   const agent = new RemoteAgent(serverUrl, apiKey);
 
