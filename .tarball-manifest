@@ -1,0 +1,22 @@
+# Deployment Package Files
+
+## Included in tarball:
+- package.json
+- package-lock.json
+- server.js
+- lib/
+- schemas/
+- Dockerfile
+- captain-definition
+- docker-compose.yml
+- .dockerignore
+- *.md documentation
+
+## Excluded from tarball:
+- node_modules/ (install on server)
+- sessions/*.json (runtime data)
+- .env (configure on server)
+- .git/
+- test files
+- log files
+- development scripts

@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Session data (user privacy)
+sessions/
+
+# Environment variables
+.env
+.env.local
+
+# Private keys (NEVER COMMIT)
+.keys/
+
+# Deployment artifacts
+*.tar.gz
+
+# Personality & anchor data (contains user info)
+.personality-anchors.json
+.anchor-receipts.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/

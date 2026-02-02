@@ -1,0 +1,45 @@
+{
+  "interactions": [
+    {
+      "id": 1,
+      "role": "user",
+      "text": "Hello, I'm Gregory Ward",
+      "ts": "2026-02-02T17:11:01.854Z"
+    },
+    {
+      "id": 2,
+      "role": "assistant",
+      "text": "{\"choice\":\"response\",\"response\":\"Hi Gregory! It's great to meet you. How can I assist you today?\",\"questionsForUser\":true,\"questions\":[\"What would you like to talk about today?\"],\"missingContext\":[],\"code\":\"\",\"language\":\"\",\"codeExplanation\":\"\",\"terminalCommand\":\"\",\"commandReasoning\":\"\",\"requiresApproval\":false,\"continue\":false}",
+      "ts": "2026-02-02T17:11:05.524Z"
+    },
+    {
+      "id": 3,
+      "role": "user",
+      "text": "Hello, I'm Gregory Ward",
+      "ts": "2026-02-02T17:11:19.507Z"
+    },
+    {
+      "id": 4,
+      "role": "assistant",
+      "text": "{\"choice\":\"response\",\"response\":\"Hi Gregory! It's nice to see you again. How can I assist you today?\",\"questionsForUser\":true,\"questions\":[\"Is there something specific you would like to discuss?\",\"How has your day been so far?\"],\"missingContext\":[],\"code\":\"\",\"language\":\"\",\"codeExplanation\":\"\",\"terminalCommand\":\"\",\"commandReasoning\":\"\",\"requiresApproval\":false,\"continue\":false}",
+      "ts": "2026-02-02T17:11:23.362Z"
+    },
+    {
+      "id": 5,
+      "role": "user",
+      "text": "Hi, remember me?",
+      "ts": "2026-02-02T17:11:45.743Z"
+    },
+    {
+      "id": 6,
+      "role": "assistant",
+      "text": "{\"choice\":\"response\",\"response\":\"Of course, Gregory! It's great to hear from you again. How can I help you today?\",\"questionsForUser\":true,\"questions\":[\"What’s on your mind today?\",\"Is there something specific you'd like to revisit?\"],\"missingContext\":[],\"code\":\"\",\"language\":\"\",\"codeExplanation\":\"\",\"terminalCommand\":\"\",\"commandReasoning\":\"\",\"requiresApproval\":false,\"continue\":false}",
+      "ts": "2026-02-02T17:11:49.238Z"
+    }
+  ],
+  "summaries": [],
+  "nextId": 7,
+  "personality": null,
+  "personalityEvolutionEnabled": true,
+  "personalityImmutable": false
+}

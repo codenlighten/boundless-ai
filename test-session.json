@@ -1,0 +1,45 @@
+{
+  "interactions": [
+    {
+      "id": 1,
+      "role": "user",
+      "text": "Hi, I am Gregory Ward",
+      "ts": "2026-02-02T17:10:33.262Z"
+    },
+    {
+      "id": 2,
+      "role": "assistant",
+      "text": "{\"choice\":\"response\",\"response\":\"Hello Gregory! Nice to meet you.\"}",
+      "ts": "2026-02-02T17:10:33.267Z"
+    },
+    {
+      "id": 3,
+      "role": "user",
+      "text": "I am working on an AI verification project",
+      "ts": "2026-02-02T17:10:33.267Z"
+    },
+    {
+      "id": 4,
+      "role": "assistant",
+      "text": "{\"choice\":\"response\",\"response\":\"That sounds interesting! I can help with AI verification.\"}",
+      "ts": "2026-02-02T17:10:33.267Z"
+    },
+    {
+      "id": 5,
+      "role": "user",
+      "text": "Can you help me build a universal chatbot?",
+      "ts": "2026-02-02T17:10:33.267Z"
+    },
+    {
+      "id": 6,
+      "role": "assistant",
+      "text": "{\"choice\":\"code\",\"code\":\"const bot = new UniversalChatbot();\",\"language\":\"javascript\"}",
+      "ts": "2026-02-02T17:10:33.267Z"
+    }
+  ],
+  "summaries": [],
+  "nextId": 7,
+  "personality": null,
+  "personalityEvolutionEnabled": true,
+  "personalityImmutable": false
+}
