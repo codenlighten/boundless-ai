@@ -211,6 +211,93 @@ app.post('/chat/:sessionId', authenticateApiKey, async (req, res) => {
 });
 
 /**
+ * POST /chat/:sessionId/execute
+ * Get LLM terminal command decision and auto-execute if approved
+ * If command requires sudo/approval, returns pendingApproval flag requiring second call with approval=true
+ * Headers: x-api-key
+ * Body: {
+ *   message: string (or query),
+ *   context?: object,
+ *   approval?: boolean (required if command needs approval)
+ * }
+ * Returns:
+ * - If no command needed: { response, executionResult: null }
+ * - If command needed & no approval required: { response, executionResult: {...} }
+ * - If command needs approval: { response, pendingApproval: true, requiresApprovalReason: "..." }
+ */
+app.post('/chat/:sessionId/execute', authenticateApiKey, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, query, context, approval } = req.body;
+    const userMessage = message || query;
+
+    if (!userMessage) {
+      return res.status(400).json({
+        error: 'Missing message (or query) field',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Format message with optional context
+    let formattedMessage = userMessage;
+    if (context && typeof context === 'object') {
+      const contextStr = JSON.stringify(context, null, 2);
+      formattedMessage = `${userMessage}\n\n[Additional Context]\n${contextStr}`;
+    }
+
+    const chatbot = await getOrCreateTerminalSession(sessionId);
+    const response = await chatbot.chat(formattedMessage);
+
+    // If LLM didn't choose terminal command, just return response
+    if (response.choice !== 'terminalCommand' || !response.terminalCommand) {
+      return res.json({
+        success: true,
+        sessionId,
+        response,
+        executionResult: null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Check if command requires approval (dangerous/sudo command)
+    const isDangerous = response.requiresApproval || 
+                       response.terminalCommand.includes('sudo') ||
+                       response.terminalCommand.match(/^(rm|kill|apt|systemctl|ufw|passwd|reboot|shutdown)/);
+
+    if (isDangerous && !approval) {
+      // Return pending approval state
+      return res.json({
+        success: true,
+        sessionId,
+        response,
+        pendingApproval: true,
+        requiresApprovalReason: `This command requires approval: "${response.terminalCommand}"`,
+        approvalInstructions: 'Please review the command and send this request again with approval: true',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Execute the approved command
+    const executionResult = await chatbot.executeCommand(response.terminalCommand, sessionId);
+
+    res.json({
+      success: true,
+      sessionId,
+      response,
+      executionResult,
+      approved: isDangerous ? true : undefined,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/chat/:sessionId/execute] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
  * POST /setup-ssh
  * Setup SSH access to a remote server
  * Body: {
