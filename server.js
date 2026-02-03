@@ -1,16 +1,21 @@
 import express from 'express';
 import cors from 'cors';
 import { MemoryChatbot } from './lib/memoryChatbot.js';
+import { AuthManager } from './lib/auth.js';
+import { AuditLogger } from './lib/auditLogger.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.CHAT_PORT || process.env.PORT || 3001;
+const authManager = new AuthManager();
+const auditLogger = new AuditLogger();
 
-console.log('[Startup] Initializing MemoryChatbot Server...');
+console.log('[Startup] Initializing MemoryChatbot Server with JWT Auth...');
 console.log('[Startup] OpenAI API Key:', process.env.OPENAI_API_KEY ? 'Found' : 'Missing');
 console.log('[Startup] Port:', PORT);
+console.log('[Startup] JWT Secret:', process.env.JWT_SECRET ? 'Using env var' : 'Using generated secret');
 
 // Middleware
 app.use(cors());
@@ -41,18 +46,78 @@ async function getOrCreateSession(sessionId) {
 }
 
 /**
+ * GET /health
+ * Health check endpoint (no auth required)
+ */
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'MemoryChatbot Server',
+    timestamp: new Date().toISOString(),
+    activeSessions: sessions.size,
+    features: {
+      auth: 'jwt',
+      chat: true,
+      terminal: false
+    }
+  });
+});
+
+/**
+ * POST /auth/token
+ * Issue a JWT token for API access (no auth required for initial token)
+ * Body: { userId: string, role?: 'public'|'team'|'admin', expiresIn?: '24h' }
+ * Returns: { token, expiresAt, userId, role }
+ */
+app.post('/auth/token', (req, res) => {
+  try {
+    const { userId, role = 'team', expiresIn } = req.body;
+
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({
+        error: 'Missing or invalid userId',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const result = authManager.issueToken(userId, role, expiresIn);
+    
+    auditLogger.logAuth({
+      userId,
+      action: 'token_issued',
+      role,
+      success: true
+    });
+
+    res.json({
+      success: true,
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/auth/token] Error:', error);
+    res.status(400).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
  * POST /chat
- * Send a message to the chatbot
+ * Send a message to the chatbot (requires jwt token)
+ * Headers: Authorization: Bearer <token>
  * Body: { 
  *   sessionId: string, 
  *   message: string (or query: string),
  *   context?: object (optional additional context)
  * }
  */
-app.post('/chat', async (req, res) => {
+app.post('/chat', authManager.middleware(), async (req, res) => {
   try {
     const { sessionId, message, query, context } = req.body;
     const userMessage = message || query;
+    const userId = req.auth.userId; // From JWT token
 
     if (!sessionId || !userMessage) {
       return res.status(400).json({
@@ -70,10 +135,20 @@ app.post('/chat', async (req, res) => {
     const chatbot = await getOrCreateSession(sessionId);
     const response = await chatbot.chat(formattedMessage);
 
+    // Log the chat interaction
+    auditLogger.logChat({
+      userId,
+      sessionId,
+      userMessage,
+      responseType: response.choice,
+      hasCommand: response.choice === 'terminalCommand'
+    });
+
     res.json({
       success: true,
       sessionId,
       response,
+      user: userId,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -87,11 +162,12 @@ app.post('/chat', async (req, res) => {
 
 /**
  * GET /session/:sessionId
- * Get session information and statistics
+ * Get session information and statistics (requires jwt token)
  */
-app.get('/session/:sessionId', async (req, res) => {
+app.get('/session/:sessionId', authManager.middleware(), async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const userId = req.auth.userId;
     const chatbot = await getOrCreateSession(sessionId);
     const stats = chatbot.getSessionStats();
     const context = chatbot.getMemoryContext();
@@ -99,6 +175,7 @@ app.get('/session/:sessionId', async (req, res) => {
     res.json({
       success: true,
       sessionId,
+      user: userId,
       stats,
       interactionCount: context.interactions.length,
       summaryCount: context.summaries.length,
@@ -121,11 +198,12 @@ app.get('/session/:sessionId', async (req, res) => {
 
 /**
  * POST /session/:sessionId/clear
- * Clear all interactions for a session
+ * Clear all interactions for a session (requires jwt token)
  */
-app.post('/session/:sessionId/clear', async (req, res) => {
+app.post('/session/:sessionId/clear', authManager.middleware(), async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const userId = req.auth.userId;
     const chatbot = await getOrCreateSession(sessionId);
 
     chatbot.session = {
@@ -140,9 +218,17 @@ app.post('/session/:sessionId/clear', async (req, res) => {
     const { saveSession } = await import('./lib/memoryStore.js');
     await saveSession(chatbot.sessionPath, chatbot.session);
 
+    auditLogger.logChat({
+      userId,
+      sessionId,
+      userMessage: '[session cleared]',
+      responseType: 'system'
+    });
+
     res.json({
       success: true,
       sessionId,
+      user: userId,
       message: 'Session cleared',
       timestamp: new Date().toISOString()
     });
@@ -203,6 +289,59 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     activeSessions: sessions.size
   });
+});
+
+/**
+ * GET /audit/logs
+ * Get audit logs (requires team or admin role)
+ * Query params: type, userId, sessionId, limit
+ */
+app.get('/audit/logs', authManager.middleware(), authManager.requireRole(['team', 'admin']), (req, res) => {
+  try {
+    const { type, userId, sessionId, limit = 100 } = req.query;
+    const filter = {};
+    if (type) filter.type = type;
+    if (userId) filter.userId = userId;
+    if (sessionId) filter.sessionId = sessionId;
+
+    const logs = auditLogger.read(filter, parseInt(limit));
+
+    res.json({
+      success: true,
+      count: logs.length,
+      logs,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/audit/logs] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /audit/stats/:userId
+ * Get user statistics from audit logs (requires team or admin role)
+ */
+app.get('/audit/stats/:userId', authManager.middleware(), authManager.requireRole(['team', 'admin']), (req, res) => {
+  try {
+    const { userId } = req.params;
+    const stats = auditLogger.getUserStats(userId);
+
+    res.json({
+      success: true,
+      stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/audit/stats/:userId] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 /**
