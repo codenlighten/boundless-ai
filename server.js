@@ -79,11 +79,13 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'MemoryChatbot Server',
     timestamp: new Date().toISOString(),
-    activeSessions: sessions.size,
+    activeSessions: chatSessions.size + terminalSessions.size,
+    chatSessions: chatSessions.size,
+    terminalSessions: terminalSessions.size,
     features: {
       auth: 'jwt',
       chat: true,
-      terminal: false
+      terminal: true
     }
   });
 });
@@ -301,19 +303,6 @@ app.get('/session/:sessionId/history', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   }
-});
-
-/**
- * GET /health
- * Health check endpoint
- */
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'MemoryChatbot Server',
-    timestamp: new Date().toISOString(),
-    activeSessions: sessions.size
-  });
 });
 
 /**
