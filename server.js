@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { MemoryChatbot } from './lib/memoryChatbot.js';
+import { TerminalChatbot } from './lib/terminalChatbot.js';
 import { AuthManager } from './lib/auth.js';
 import { AuditLogger } from './lib/auditLogger.js';
 import dotenv from 'dotenv';
@@ -21,26 +22,50 @@ console.log('[Startup] JWT Secret:', process.env.JWT_SECRET ? 'Using env var' : 
 app.use(cors());
 app.use(express.json());
 
-// Session management - one chatbot per client
-const sessions = new Map();
+// Session management - separate for chat and terminal
+const chatSessions = new Map();
+const terminalSessions = new Map();
 
 /**
- * Get or create a chatbot session
+ * Get or create a chat session
  * @param {string} sessionId - Unique session identifier
  * @returns {Promise<MemoryChatbot>} Chatbot instance
  */
-async function getOrCreateSession(sessionId) {
+async function getOrCreateChatSession(sessionId) {
   try {
-    if (!sessions.has(sessionId)) {
+    if (!chatSessions.has(sessionId)) {
       const sessionPath = `./sessions/${sessionId}.json`;
       const chatbot = new MemoryChatbot(sessionPath);
       await chatbot.initialize();
-      sessions.set(sessionId, chatbot);
-      console.log(`[Session] Created new session: ${sessionId}`);
+      chatSessions.set(sessionId, chatbot);
+      console.log(`[Chat Session] Created new session: ${sessionId}`);
     }
-    return sessions.get(sessionId);
+    return chatSessions.get(sessionId);
   } catch (error) {
-    console.error(`[Session] Error creating session ${sessionId}:`, error);
+    console.error(`[Chat Session] Error creating session ${sessionId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Get or create a terminal session
+ * @param {string} sessionId - Unique session identifier
+ * @returns {Promise<TerminalChatbot>} Terminal chatbot instance
+ */
+async function getOrCreateTerminalSession(sessionId) {
+  try {
+    if (!terminalSessions.has(sessionId)) {
+      const sessionPath = `./sessions/${sessionId}-terminal.json`;
+      const chatbot = new TerminalChatbot(sessionPath, {
+        disableWhitelist: process.env.DISABLE_COMMAND_WHITELIST === 'true'
+      });
+      await chatbot.initialize();
+      terminalSessions.set(sessionId, chatbot);
+      console.log(`[Terminal Session] Created new session: ${sessionId}`);
+    }
+    return terminalSessions.get(sessionId);
+  } catch (error) {
+    console.error(`[Terminal Session] Error creating session ${sessionId}:`, error);
     throw error;
   }
 }
@@ -132,7 +157,7 @@ app.post('/chat', authManager.middleware(), async (req, res) => {
       formattedMessage = `${userMessage}\n\n[Additional Context]\n${contextStr}`;
     }
 
-    const chatbot = await getOrCreateSession(sessionId);
+    const chatbot = await getOrCreateChatSession(sessionId);
     const response = await chatbot.chat(formattedMessage);
 
     // Log the chat interaction
@@ -168,7 +193,7 @@ app.get('/session/:sessionId', authManager.middleware(), async (req, res) => {
   try {
     const { sessionId } = req.params;
     const userId = req.auth.userId;
-    const chatbot = await getOrCreateSession(sessionId);
+    const chatbot = await getOrCreateChatSession(sessionId);
     const stats = chatbot.getSessionStats();
     const context = chatbot.getMemoryContext();
 
@@ -204,7 +229,7 @@ app.post('/session/:sessionId/clear', authManager.middleware(), async (req, res)
   try {
     const { sessionId } = req.params;
     const userId = req.auth.userId;
-    const chatbot = await getOrCreateSession(sessionId);
+    const chatbot = await getOrCreateChatSession(sessionId);
 
     chatbot.session = {
       interactions: [],
@@ -248,7 +273,7 @@ app.post('/session/:sessionId/clear', authManager.middleware(), async (req, res)
 app.get('/session/:sessionId/history', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const chatbot = await getOrCreateSession(sessionId);
+    const chatbot = await getOrCreateChatSession(sessionId);
     const context = chatbot.getMemoryContext();
 
     res.json({
@@ -337,6 +362,291 @@ app.get('/audit/stats/:userId', authManager.middleware(), authManager.requireRol
     });
   } catch (error) {
     console.error('[/audit/stats/:userId] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ============================================================
+// TERMINAL ENDPOINTS (requires JWT auth with 'team' role)
+// ============================================================
+
+/**
+ * POST /terminal/execute
+ * Direct terminal command execution (requires team role)
+ * Headers: Authorization: Bearer <token>
+ * Body: { sessionId: string, command: string, context?: object }
+ */
+app.post('/terminal/execute', authManager.middleware(), authManager.requireRole(['team', 'admin']), async (req, res) => {
+  try {
+    const { sessionId, command, context } = req.body;
+    const userId = req.auth.userId;
+
+    if (!sessionId || !command) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['sessionId', 'command'],
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const chatbot = await getOrCreateTerminalSession(sessionId);
+    const result = await chatbot.executeCommand(command, sessionId);
+
+    // Log terminal execution
+    auditLogger.logTerminalCommand({
+      userId,
+      sessionId,
+      command,
+      success: result.success,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      warning: result.warning
+    });
+
+    res.json({
+      success: result.success,
+      user: userId,
+      ...result,
+      context: context || null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/terminal/execute] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /terminal/history/:sessionId
+ * Get command execution history (requires team role)
+ */
+app.get('/terminal/history/:sessionId', authManager.middleware(), authManager.requireRole(['team', 'admin']), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const userId = req.auth.userId;
+    const limit = parseInt(req.query.limit) || 50;
+
+    const chatbot = await getOrCreateTerminalSession(sessionId);
+    const history = chatbot.getCommandHistory(limit);
+
+    res.json({
+      success: true,
+      user: userId,
+      sessionId,
+      history,
+      totalRecords: chatbot.commandHistory.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/terminal/history/:sessionId] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /terminal/stats/:sessionId
+ * Get execution statistics (requires team role)
+ */
+app.get('/terminal/stats/:sessionId', authManager.middleware(), authManager.requireRole(['team', 'admin']), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const userId = req.auth.userId;
+
+    const chatbot = await getOrCreateTerminalSession(sessionId);
+    const stats = chatbot.getExecutionStats();
+
+    res.json({
+      success: true,
+      user: userId,
+      sessionId,
+      stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/terminal/stats/:sessionId] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /terminal/chat/:sessionId
+ * Chat with terminal context (requires team role)
+ * Body: { message: string (or query: string), context?: object }
+ */
+app.post('/terminal/chat/:sessionId', authManager.middleware(), authManager.requireRole(['team', 'admin']), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, query, context } = req.body;
+    const userId = req.auth.userId;
+    const userMessage = message || query;
+
+    if (!userMessage) {
+      return res.status(400).json({
+        error: 'Missing message (or query) field',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Format message with optional context
+    let formattedMessage = userMessage;
+    if (context && typeof context === 'object') {
+      const contextStr = JSON.stringify(context, null, 2);
+      formattedMessage = `${userMessage}\n\n[Additional Context]\n${contextStr}`;
+    }
+
+    const chatbot = await getOrCreateTerminalSession(sessionId);
+    const response = await chatbot.chat(formattedMessage);
+
+    // Log chat interaction
+    auditLogger.logChat({
+      userId,
+      sessionId,
+      userMessage,
+      responseType: response.choice,
+      hasCommand: response.choice === 'terminalCommand'
+    });
+
+    res.json({
+      success: true,
+      user: userId,
+      sessionId,
+      response,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/terminal/chat/:sessionId] Error:', error);
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /terminal/chat/:sessionId/execute
+ * LLM decides and executes terminal commands with approval workflow (requires team role)
+ * Body: { message: string (or query), context?: object, approval?: boolean }
+ * Returns:
+ * - If no command needed: { response, executionResult: null }
+ * - If command needs approval: { response, pendingApproval: true }
+ * - If approved: { response, executionResult: {...} }
+ */
+app.post('/terminal/chat/:sessionId/execute', authManager.middleware(), authManager.requireRole(['team', 'admin']), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, query, context, approval } = req.body;
+    const userId = req.auth.userId;
+    const userMessage = message || query;
+
+    if (!userMessage) {
+      return res.status(400).json({
+        error: 'Missing message (or query) field',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Format message with optional context
+    let formattedMessage = userMessage;
+    if (context && typeof context === 'object') {
+      const contextStr = JSON.stringify(context, null, 2);
+      formattedMessage = `${userMessage}\n\n[Additional Context]\n${contextStr}`;
+    }
+
+    const chatbot = await getOrCreateTerminalSession(sessionId);
+    const response = await chatbot.chat(formattedMessage);
+
+    // Log chat interaction
+    auditLogger.logChat({
+      userId,
+      sessionId,
+      userMessage,
+      responseType: response.choice,
+      hasCommand: response.choice === 'terminalCommand'
+    });
+
+    // If LLM didn't choose terminal command, just return response
+    if (response.choice !== 'terminalCommand' || !response.terminalCommand) {
+      return res.json({
+        success: true,
+        user: userId,
+        sessionId,
+        response,
+        executionResult: null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Check if command requires approval (dangerous/sudo command)
+    const isDangerous = response.requiresApproval || 
+                       response.terminalCommand.includes('sudo') ||
+                       response.terminalCommand.match(/^(rm|kill|apt|systemctl|ufw|passwd|reboot|shutdown)/);
+
+    if (isDangerous && !approval) {
+      // Log approval request
+      auditLogger.logApproval({
+        userId,
+        sessionId,
+        command: response.terminalCommand,
+        approved: false
+      });
+
+      // Return pending approval state
+      return res.json({
+        success: true,
+        user: userId,
+        sessionId,
+        response,
+        pendingApproval: true,
+        requiresApprovalReason: `This command requires approval: "${response.terminalCommand}"`,
+        approvalInstructions: 'Please review the command and send this request again with approval: true',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Execute the approved command
+    const startTime = Date.now();
+    const executionResult = await chatbot.executeCommand(response.terminalCommand, sessionId);
+    const executionTime = Date.now() - startTime;
+
+    // Log terminal execution with approval
+    auditLogger.logTerminalCommand({
+      userId,
+      sessionId,
+      command: response.terminalCommand,
+      success: executionResult.success,
+      exitCode: executionResult.exitCode,
+      stdout: executionResult.stdout,
+      stderr: executionResult.stderr,
+      requiresApproval: isDangerous,
+      approved: isDangerous ? true : undefined,
+      warning: executionResult.warning,
+      executionTime
+    });
+
+    res.json({
+      success: true,
+      user: userId,
+      sessionId,
+      response,
+      executionResult,
+      approved: isDangerous ? true : undefined,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[/terminal/chat/:sessionId/execute] Error:', error);
     res.status(500).json({
       error: error.message,
       timestamp: new Date().toISOString()
